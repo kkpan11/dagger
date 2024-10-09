@@ -239,10 +239,7 @@ public final class BindingFactory {
   public MultiboundMapBinding multiboundMap(
       Key key, Iterable<ContributionBinding> multibindingContributions) {
     return MultiboundMapBinding.builder()
-        .bindingType(
-            multibindingRequiresProduction(key, multibindingContributions)
-                ? BindingType.PRODUCTION
-                : BindingType.PROVISION)
+        .optionalBindingType(multibindingBindingType(key, multibindingContributions))
         .key(key)
         .dependencies(
             dependencyRequestFactory.forMultibindingContributions(key, multibindingContributions))
@@ -257,29 +254,36 @@ public final class BindingFactory {
   public MultiboundSetBinding multiboundSet(
       Key key, Iterable<ContributionBinding> multibindingContributions) {
     return MultiboundSetBinding.builder()
-        .bindingType(
-            multibindingRequiresProduction(key, multibindingContributions)
-                ? BindingType.PRODUCTION
-                : BindingType.PROVISION)
+        .optionalBindingType(multibindingBindingType(key, multibindingContributions))
         .key(key)
         .dependencies(
             dependencyRequestFactory.forMultibindingContributions(key, multibindingContributions))
         .build();
   }
 
-  private boolean multibindingRequiresProduction(
+  private Optional<BindingType> multibindingBindingType(
       Key key, Iterable<ContributionBinding> multibindingContributions) {
     if (MapType.isMap(key)) {
       MapType mapType = MapType.from(key);
       if (mapType.valuesAreTypeOf(TypeNames.PRODUCER)
           || mapType.valuesAreTypeOf(TypeNames.PRODUCED)) {
-        return true;
+        return Optional.of(BindingType.PRODUCTION);
       }
     } else if (SetType.isSet(key) && SetType.from(key).elementsAreTypeOf(TypeNames.PRODUCED)) {
-      return true;
+      return Optional.of(BindingType.PRODUCTION);
+    }
+    if (Iterables.any(
+            multibindingContributions,
+            binding -> binding.optionalBindingType().equals(Optional.of(BindingType.PRODUCTION)))) {
+      return Optional.of(BindingType.PRODUCTION);
     }
     return Iterables.any(
-        multibindingContributions, binding -> binding.bindingType().equals(BindingType.PRODUCTION));
+            multibindingContributions,
+            binding -> binding.optionalBindingType().isEmpty())
+        // If a dependency is missing a BindingType then we can't determine the BindingType of this
+        // binding yet since it may end up depending on a production type.
+        ? Optional.empty()
+        : Optional.of(BindingType.PROVISION);
   }
 
   /**
@@ -380,6 +384,11 @@ public final class BindingFactory {
     return SubcomponentCreatorBinding.builder().key(subcomponentDeclaration.key()).build();
   }
 
+  /** Returns a {@link BindingKind#DELEGATE} binding. */
+  DelegateBinding delegateBinding(DelegateDeclaration delegateDeclaration) {
+    return delegateBinding(delegateDeclaration, Optional.empty());
+  }
+
   /**
    * Returns a {@link BindingKind#DELEGATE} binding.
    *
@@ -388,23 +397,31 @@ public final class BindingFactory {
    */
   DelegateBinding delegateBinding(
       DelegateDeclaration delegateDeclaration, ContributionBinding actualBinding) {
-    return delegateBinding(delegateDeclaration, Optional.of(actualBinding));
+    return delegateBinding(delegateDeclaration, delegateBindingType(Optional.of(actualBinding)));
   }
 
   private DelegateBinding delegateBinding(
-      DelegateDeclaration delegateDeclaration, Optional<ContributionBinding> actualBinding) {
-    BindingType bindingType = delegateBindingType(actualBinding);
+      DelegateDeclaration delegateDeclaration, Optional<BindingType> optionalBindingType) {
     return DelegateBinding.builder()
         .contributionType(delegateDeclaration.contributionType())
         .bindingElement(delegateDeclaration.bindingElement().get())
         .contributingModule(delegateDeclaration.contributingModule().get())
         .delegateRequest(delegateDeclaration.delegateRequest())
         .nullability(Nullability.of(delegateDeclaration.bindingElement().get()))
-        .bindingType(bindingType)
+        .optionalBindingType(optionalBindingType)
         .key(
-            bindingType == BindingType.PRODUCTION
-                ? keyFactory.forDelegateBinding(delegateDeclaration, TypeNames.PRODUCER)
-                : keyFactory.forDelegateBinding(delegateDeclaration, TypeNames.PROVIDER))
+            optionalBindingType.isEmpty()
+                // This is used by BindingGraphFactory which passes in an empty optionalBindingType.
+                // In this case, multibound map contributions will always return the key type
+                // without framework types, i.e. Map<K,V>.
+                ? delegateDeclaration.key()
+                // This is used by LegacyBindingGraphFactory, which passes in a non-empty
+                // optionalBindingType. Then, KeyFactory decides whether or not multibound map
+                // contributions should include the factory type based on the compiler flag,
+                // -Adagger.useFrameworkTypeInMapMultibindingContributionKey.
+                : optionalBindingType.get() == BindingType.PRODUCTION
+                    ? keyFactory.forDelegateBinding(delegateDeclaration, TypeNames.PRODUCER)
+                    : keyFactory.forDelegateBinding(delegateDeclaration, TypeNames.PROVIDER))
         .scope(injectionAnnotations.getScope(delegateDeclaration.bindingElement().get()))
         .build();
   }
@@ -414,44 +431,54 @@ public final class BindingFactory {
    * no binding that satisfies the {@code @Binds} declaration.
    */
   public DelegateBinding unresolvedDelegateBinding(DelegateDeclaration delegateDeclaration) {
-    return delegateBinding(delegateDeclaration, Optional.empty());
+    return delegateBinding(delegateDeclaration, Optional.of(BindingType.PROVISION));
   }
 
-  private BindingType delegateBindingType(Optional<ContributionBinding> actualBinding) {
+  private Optional<BindingType> delegateBindingType(Optional<ContributionBinding> actualBinding) {
     if (actualBinding.isEmpty()) {
-      return BindingType.PROVISION;
+      return Optional.empty();
     }
     checkArgument(actualBinding.get().bindingType() != BindingType.MEMBERS_INJECTION);
-    return actualBinding.get().bindingType();
+    return Optional.of(actualBinding.get().bindingType());
   }
 
-  /**
-   * Returns an {@link BindingKind#OPTIONAL} binding for {@code key}.
-   *
-   * @param requestKind the kind of request for the optional binding
-   * @param underlyingKeyBindings the possibly empty set of bindings that exist in the component for
-   *     the underlying (non-optional) key
-   */
   /** Returns an {@link BindingKind#OPTIONAL} present binding for {@code key}. */
   OptionalBinding syntheticPresentOptionalDeclaration(
       Key key, ImmutableCollection<Binding> optionalContributions) {
     checkArgument(!optionalContributions.isEmpty());
-    RequestKind requestKind = getRequestKind(OptionalType.from(key).valueType());
-    boolean isProduction =
-        optionalContributions.stream()
-                .anyMatch(binding -> binding.bindingType() == BindingType.PRODUCTION)
-            || requestKind.equals(RequestKind.PRODUCER) // handles producerFromProvider cases
-            || requestKind.equals(RequestKind.PRODUCED); // handles producerFromProvider cases
     return OptionalBinding.builder()
-        .bindingType(isProduction ? BindingType.PRODUCTION : BindingType.PROVISION)
+        .optionalBindingType(presentOptionalBindingType(key, optionalContributions))
         .key(key)
         .delegateRequest(dependencyRequestFactory.forSyntheticPresentOptionalBinding(key))
         .build();
   }
 
+  private Optional<BindingType> presentOptionalBindingType(
+      Key key, ImmutableCollection<Binding> optionalContributions) {
+    RequestKind requestKind = getRequestKind(OptionalType.from(key).valueType());
+    if (requestKind.equals(RequestKind.PRODUCER) // handles producerFromProvider cases
+            || requestKind.equals(RequestKind.PRODUCED)) { // handles producerFromProvider cases
+      return Optional.of(BindingType.PRODUCTION);
+    }
+    if (optionalContributions.stream()
+            .filter(binding -> binding.optionalBindingType().isPresent())
+            .anyMatch(binding -> binding.bindingType() == BindingType.PRODUCTION)) {
+      return Optional.of(BindingType.PRODUCTION);
+    }
+    return optionalContributions.stream()
+            .anyMatch(binding -> binding.optionalBindingType().isEmpty())
+        // If a dependency is missing a BindingType then we can't determine the BindingType of this
+        // binding yet since it may end up depending on a production type.
+        ? Optional.empty()
+        : Optional.of(BindingType.PROVISION);
+  }
+
   /** Returns an {@link BindingKind#OPTIONAL} absent binding for {@code key}. */
   OptionalBinding syntheticAbsentOptionalDeclaration(Key key) {
-    return OptionalBinding.builder().key(key).bindingType(BindingType.PROVISION).build();
+    return OptionalBinding.builder()
+        .key(key)
+        .optionalBindingType(Optional.of(BindingType.PROVISION))
+        .build();
   }
 
   /** Returns a {@link BindingKind#MEMBERS_INJECTOR} binding. */

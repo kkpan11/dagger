@@ -81,6 +81,6 @@ public abstract class OptionalBinding extends ContributionBinding {
   abstract static class Builder extends ContributionBinding.Builder<OptionalBinding, Builder> {
     abstract Builder delegateRequest(DependencyRequest delegateRequest);
 
-    abstract Builder bindingType(BindingType bindingType);
+    abstract Builder optionalBindingType(Optional<BindingType> optionalBindingType);
   }
 }

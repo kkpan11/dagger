@@ -24,6 +24,7 @@ import dagger.internal.codegen.base.ContributionType;
 import dagger.internal.codegen.model.BindingKind;
 import dagger.internal.codegen.model.DependencyRequest;
 import dagger.internal.codegen.xprocessing.Nullability;
+import java.util.Optional;
 
 /** A binding for a {@link BindingKind#MULTIBOUND_MAP}. */
 @CheckReturnValue
@@ -65,6 +66,6 @@ public abstract class MultiboundMapBinding extends ContributionBinding {
       extends ContributionBinding.Builder<MultiboundMapBinding, Builder> {
     abstract Builder dependencies(ImmutableSet<DependencyRequest> dependencies);
 
-    abstract Builder bindingType(BindingType bindingType);
+    abstract Builder optionalBindingType(Optional<BindingType> optionalBindingType);
   }
 }

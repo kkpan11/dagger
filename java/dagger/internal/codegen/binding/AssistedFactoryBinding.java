@@ -26,6 +26,7 @@ import dagger.internal.codegen.model.DependencyRequest;
 import dagger.internal.codegen.model.Key;
 import dagger.internal.codegen.model.RequestKind;
 import dagger.internal.codegen.xprocessing.Nullability;
+import java.util.Optional;
 
 /** A binding for a {@link BindingKind#ASSISTED_FACTORY}. */
 @CheckReturnValue
@@ -37,8 +38,8 @@ public abstract class AssistedFactoryBinding extends ContributionBinding {
   }
 
   @Override
-  public BindingType bindingType() {
-    return BindingType.PROVISION;
+  public Optional<BindingType> optionalBindingType() {
+    return Optional.of(BindingType.PROVISION);
   }
 
   @Override

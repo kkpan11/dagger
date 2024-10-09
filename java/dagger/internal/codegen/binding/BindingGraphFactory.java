@@ -58,7 +58,6 @@ import dagger.internal.codegen.model.DependencyRequest;
 import dagger.internal.codegen.model.Key;
 import dagger.internal.codegen.model.Scope;
 import java.util.ArrayDeque;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -122,6 +121,7 @@ public final class BindingGraphFactory {
       unreachableNodes(network.asGraph(), resolver.componentNode).forEach(network::removeNode);
     }
 
+    network = BindingGraphTransformations.withFixedBindingTypes(network);
     return BindingGraph.create(
         ImmutableNetwork.copyOf(network),
         createFullBindingGraph);
@@ -137,7 +137,6 @@ public final class BindingGraphFactory {
     final Map<Key, ResolvedBindings> resolvedContributionBindings = new LinkedHashMap<>();
     final Map<Key, ResolvedBindings> resolvedMembersInjectionBindings = new LinkedHashMap<>();
     final RequiresResolutionChecker requiresResolutionChecker = new RequiresResolutionChecker();
-    final Deque<Key> cycleStack = new ArrayDeque<>();
     final Queue<ComponentDescriptor> subcomponentsToResolve = new ArrayDeque<>();
 
     Resolver(ComponentDescriptor componentDescriptor) {
@@ -383,48 +382,10 @@ public final class BindingGraphFactory {
         ImmutableSet<DelegateDeclaration> delegateDeclarations) {
       ImmutableSet.Builder<ContributionBinding> builder = ImmutableSet.builder();
       for (DelegateDeclaration delegateDeclaration : delegateDeclarations) {
-        builder.add(createDelegateBinding(delegateDeclaration));
+        builder.add(bindingFactory.delegateBinding(delegateDeclaration));
       }
       return builder.build();
     }
-
-    /**
-     * Creates one (and only one) delegate binding for a delegate declaration, based on the resolved
-     * bindings of the right-hand-side of a {@link dagger.Binds} method. If there are duplicate
-     * bindings for the dependency key, there should still be only one binding for the delegate key.
-     */
-    private ContributionBinding createDelegateBinding(DelegateDeclaration delegateDeclaration) {
-      Key delegateKey = delegateDeclaration.delegateRequest().key();
-      if (cycleStack.contains(delegateKey)) {
-        return bindingFactory.unresolvedDelegateBinding(delegateDeclaration);
-      }
-
-      ResolvedBindings resolvedDelegate;
-      try {
-        cycleStack.push(delegateKey);
-        resolvedDelegate = lookUpBindings(delegateKey);
-      } finally {
-        cycleStack.pop();
-      }
-      if (resolvedDelegate.bindings().isEmpty()) {
-        // This is guaranteed to result in a missing binding error, so it doesn't matter if the
-        // binding is a Provision or Production, except if it is a @IntoMap method, in which
-        // case the key will be of type Map<K, Provider<V>>, which will be "upgraded" into a
-        // Map<K, Producer<V>> if it's requested in a ProductionComponent. This may result in a
-        // strange error, that the RHS needs to be provided with an @Inject or @Provides
-        // annotated method, but a user should be able to figure out if a @Produces annotation
-        // is needed.
-        // TODO(gak): revisit how we model missing delegates if/when we clean up how we model
-        // binding declarations
-        return bindingFactory.unresolvedDelegateBinding(delegateDeclaration);
-      }
-      // It doesn't matter which of these is selected, since they will later on produce a
-      // duplicate binding error.
-      ContributionBinding explicitDelegate =
-          (ContributionBinding) resolvedDelegate.bindings().iterator().next();
-      return bindingFactory.delegateBinding(delegateDeclaration, explicitDelegate);
-    }
-
     /**
      * Returns a {@link BindingNode} for the given binding that is owned by an ancestor component,
      * if one exists. Otherwise returns {@link Optional#empty()}.
